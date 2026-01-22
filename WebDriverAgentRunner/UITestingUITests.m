@@ -14,6 +14,10 @@
 #import <WebDriverAgentLib/FBWebServer.h>
 #import <WebDriverAgentLib/XCTestCase.h>
 
+// Import Photo Companion Service Manager (Swift)
+// Xcode automatically generates WebDriverAgentRunner-Swift.h when Swift files are added to the project
+#import "WebDriverAgentRunner-Swift.h"
+
 @interface UITestingUITests : FBFailureProofTestCase <FBWebServerDelegate>
 @end
 
@@ -43,6 +47,10 @@
  */
 - (void)testRunner
 {
+  // Start Photo Companion Service
+  [PhotoCompanionServiceManager.shared startService];
+  
+  // Start WebDriverAgent server
   FBWebServer *webServer = [[FBWebServer alloc] init];
   webServer.delegate = self;
   [webServer startServing];
