@@ -1,0 +1,3 @@
+PRODUCT_BUNDLE_IDENTIFIER = com.facebook.WebDriverAgentRunner.xyautotest
+DEVELOPMENT_TEAM = Y8LRQ27V4E
+CODE_SIGN_STYLE = Automatic

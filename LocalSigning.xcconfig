@@ -1,0 +1,14 @@
+//
+//  LocalSigning.xcconfig
+//  WebDriverAgent
+//
+//  Created by chenshiyang on 2026/1/22.
+//  Copyright © 2026 Facebook. All rights reserved.
+//
+
+// Configuration settings file format documentation can be found at:
+// https://developer.apple.com/documentation/xcode/adding-a-build-configuration-file-to-your-project
+
+PRODUCT_BUNDLE_IDENTIFIER = com.facebook.WebDriverAgentRunner.xyautotest
+DEVELOPMENT_TEAM = Y8LRQ27V4E
+CODE_SIGN_STYLE = Automatic
