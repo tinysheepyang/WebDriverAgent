@@ -22,6 +22,7 @@ import Network
 import CoreMedia
 import UIKit
 import WebKit
+import XCTest
 
 // 帧类型
 enum FrameType: UInt16 {
@@ -111,6 +112,8 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
             listener?.stateUpdateHandler = { [weak self] state in
                 guard let self = self else { return }
                 switch state {
+                case .setup:
+                    print("[PhotoCompanionService] 🔧 Listener setup on port: \(port.rawValue)")
                 case .ready:
                     print("[PhotoCompanionService] ✅ Listener ready on port: \(port.rawValue)")
                     // 打印监听信息
@@ -162,7 +165,8 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
             case .failed(let error):
                 print("[PhotoCompanionService] ❌ Connection failed: \(error)")
                 // 不打印详细的 TCP 错误（这些是正常的连接关闭）
-                if let posixError = error as? POSIXError, posixError.code == .ECONNRESET {
+                // NWError 不能转换为 POSIXError，直接检查 NWError 的 code
+                if case .posix(let code) = error, code == .ECONNRESET {
                     print("[PhotoCompanionService] ℹ️  Connection reset by peer (normal when PC closes connection)")
                 } else {
                     print("[PhotoCompanionService] Error details: \(error.localizedDescription)")
@@ -209,7 +213,7 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
             
             if let error = error {
                 // 连接重置是正常的（PC 端关闭连接时）
-                if let posixError = error as? POSIXError, posixError.code == .ECONNRESET {
+                if case .posix(let code) = error, code == .ECONNRESET {
                     print("[PhotoCompanionService] ℹ️  Connection reset by peer (normal when PC closes connection)")
                 } else {
                     print("[PhotoCompanionService] ⚠️  Receive error: \(error)")
@@ -240,7 +244,7 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                 return
             }
             
-            let version = headerData.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt16.self).bigEndian }
+            let _ = headerData.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt16.self).bigEndian } // version (currently unused)
             let typeRaw = headerData.withUnsafeBytes { $0.load(fromByteOffset: 6, as: UInt16.self).bigEndian }
             guard let type = FrameType(rawValue: typeRaw) else {
                 print("[PhotoCompanionService] Unknown frame type: \(typeRaw)")
@@ -271,7 +275,7 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                 
                 if let error = error {
                     // 连接重置是正常的（PC 端关闭连接时）
-                    if let posixError = error as? POSIXError, posixError.code == .ECONNRESET {
+                    if case .posix(let code) = error, code == .ECONNRESET {
                         print("[PhotoCompanionService] ℹ️  Connection reset while receiving payload (normal when PC closes connection)")
                     } else {
                         print("[PhotoCompanionService] ⚠️  Receive payload error: \(error)")
@@ -582,8 +586,8 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                 print("[PhotoCompanionService] ✅ Video is not degraded (full quality confirmed)")
             }
             
-            // 检查获取的版本类型
-            if let version = info?[PHImageResultRequestIDKey] as? Int {
+            // 检查获取的版本类型（当前未使用，保留用于未来扩展）
+            if let _ = info?[PHImageResultRequestIDKey] as? Int {
                 // 这个 key 实际上不是版本信息，但我们可以检查其他信息
             }
             
@@ -739,14 +743,16 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
         }
         
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                print("[PhotoCompanionService] ❌ AUTO_LOGIN: self is nil in DispatchQueue.main.async")
+                return
+            }
             
             let app = UIApplication.shared
             let state = app.applicationState
-            print("[PhotoCompanionService] 🔐 AUTO_LOGIN applicationState=\(state.rawValue)")
+            print("[PhotoCompanionService] 🔐 AUTO_LOGIN applicationState=\(state.rawValue) (0=active, 1=inactive, 2=background)")
             
             // iOS 安全限制：后台/不可见 App 不能直接发起「不受信任的用户操作」（比如拉起其它 App）
-            // 如果当前不在前台，直接返回可读错误，让上游提示用户「先切到前台再重试」
             guard state == .active else {
                 let friendlyState: String
                 switch state {
@@ -754,42 +760,46 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                 case .inactive: friendlyState = "inactive"
                 default: friendlyState = "unknown"
                 }
-                
                 let resp: [String: Any] = [
                     "status": "error",
                     "code": "app_not_active",
                     "message": "iOS 限制：助手应用当前不在前台（\(friendlyState)），无法直接发起自动登录，请先把助手 App 切到前台后在 PC 端重新点击登录。",
                     "phone": phone,
-                    "env": env
+                    "env": env,
+                    "applicationState": friendlyState
                 ]
-                print("[PhotoCompanionService] ❌ AUTO_LOGIN aborted because app is not active (state=\(friendlyState))")
+                print("[PhotoCompanionService] ❌ AUTO_LOGIN aborted: app not active (state=\(friendlyState))")
                 self.sendResponseFrame(type: .AUTO_LOGIN, requestId: requestId, data: resp, connection: connection)
                 return
             }
             
-            // 使用 .universalLinksOnly: false 确保自定义 scheme 可以直接打开，不询问用户
-            if app.canOpenURL(url) {
+            let canOpen = app.canOpenURL(url)
+            print("[PhotoCompanionService] 🔐 canOpenURL(\(urlString)) = \(canOpen)")
+            
+            // 关键：先发送响应，再打开 URL。打开 URL 会切到卡贷 App，WDA 被后台挂起，连接可能断开；
+            // 若在 open 之后才 send，PC 会收到 Connection closed。先 send 再 open，PC 能拿到结果，且 WDA 不崩溃。
+            let resp: [String: Any] = [
+                "status": "success",
+                "message": "Auto login started",
+                "phone": phone,
+                "env": env,
+                "canOpenURL": canOpen,
+                "url": urlString,
+                "method": "UIApplication"
+            ]
+            print("[PhotoCompanionService] 🔐 AUTO_LOGIN sending response first, then opening URL")
+            self.sendResponseFrame(type: .AUTO_LOGIN, requestId: requestId, data: resp, connection: connection)
+            
+            // 延迟 0.2s 再 open，确保响应已发送完成，避免 open 后立即后台导致连接提前断开
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 app.open(url, options: [:], completionHandler: { success in
-                    let resp: [String: Any] = [
-                        "status": success ? "success" : "error",
-                        "message": success ? "Auto login started" : "Failed to open auto-login URL",
-                        "phone": phone,
-                        "env": env
-                    ]
-                    print("[PhotoCompanionService] 🔐 AUTO_LOGIN finished, success=\(success)")
-                    self.sendResponseFrame(type: .AUTO_LOGIN, requestId: requestId, data: resp, connection: connection)
-                })
-            } else {
-                // 如果 canOpenURL 返回 false，仍然尝试打开（某些情况下 canOpenURL 可能不准确）
-                app.open(url, options: [:], completionHandler: { success in
-                    let resp: [String: Any] = [
-                        "status": success ? "success" : "error",
-                        "message": success ? "Auto login started" : "Failed to open auto-login URL (app may not be installed)",
-                        "phone": phone,
-                        "env": env
-                    ]
-                    print("[PhotoCompanionService] 🔐 AUTO_LOGIN finished, success=\(success)")
-                    self.sendResponseFrame(type: .AUTO_LOGIN, requestId: requestId, data: resp, connection: connection)
+                    if success {
+                        print("[PhotoCompanionService] ✅ AUTO_LOGIN URL opened, app should launch")
+                    } else {
+                        print("[PhotoCompanionService] ⚠️ AUTO_LOGIN app.open() returned false (scheme may not be registered)")
+                    }
+                    // 不在此处 sendResponseFrame：已在上方发送。不调用 handleOpenSchemeAlert，避免切 app 后
+                    // 在后台跑 XCUITest 导致 WDA 崩溃；PC 端通过 tryAcceptIos15ConfirmAsync + WDA 处理弹窗。
                 })
             }
         }
@@ -825,30 +835,81 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
             print("[PhotoCompanionService] 🌐 Detected custom scheme (\(scheme)), using UIApplication.shared.open()")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                // 对于自定义 scheme，直接打开，不询问用户
-                if UIApplication.shared.canOpenURL(url) {
-                    UIApplication.shared.open(url, options: [:], completionHandler: { success in
-                        let resp: [String: Any] = [
-                            "status": success ? "success" : "error",
-                            "message": success ? "URL opened successfully" : "Failed to open URL",
-                            "url": urlString,
-                            "scheme": scheme
-                        ]
-                        print("[PhotoCompanionService] 🌐 Custom scheme open result: success=\(success)")
-                        self.sendResponseFrame(type: .OPEN_URL, requestId: requestId, data: resp, connection: connection)
-                    })
-                } else {
-                    // 如果 canOpenURL 返回 false，仍然尝试打开
-                    UIApplication.shared.open(url, options: [:], completionHandler: { success in
-                        let resp: [String: Any] = [
-                            "status": success ? "success" : "error",
-                            "message": success ? "URL opened successfully" : "Failed to open URL (app may not be installed)",
-                            "url": urlString,
-                            "scheme": scheme
-                        ]
-                        print("[PhotoCompanionService] 🌐 Custom scheme open result: success=\(success)")
-                        self.sendResponseFrame(type: .OPEN_URL, requestId: requestId, data: resp, connection: connection)
-                    })
+                // 尝试使用 LSApplicationWorkspace（可能避免对话框）
+                // 注意：私有 API 可能在某些 iOS 版本上不可用或导致崩溃，使用时要小心
+                var usePrivateAPI = false
+                if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
+                    // 安全地获取 defaultWorkspace
+                    let defaultWorkspaceSelector = NSSelectorFromString("defaultWorkspace")
+                    if workspaceClass.responds(to: defaultWorkspaceSelector) {
+                        if let workspace = workspaceClass.perform(defaultWorkspaceSelector)?.takeUnretainedValue() as? NSObject {
+                            // 使用 openURL:withOptions:（2 参数），perform 只支持 2 个 with 实参
+                            let openURLSelector = NSSelectorFromString("openURL:withOptions:")
+                            if workspace.responds(to: openURLSelector) {
+                                // 使用 autoreleasepool 确保内存管理正确
+                                let result = autoreleasepool {
+                                    return workspace.perform(openURLSelector, with: url, with: [:])?.takeUnretainedValue() as? Bool ?? false
+                                }
+                                if result {
+                                    print("[PhotoCompanionService] 🌐 LSApplicationWorkspace.openURL() 成功")
+                                    usePrivateAPI = true
+                                    // 即使使用私有 API，也可能弹对话框，所以仍然尝试自动处理
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        self.handleOpenSchemeAlert()
+                                    }
+                                    let resp: [String: Any] = [
+                                        "status": "success",
+                                        "message": "URL opened successfully (via LSApplicationWorkspace)",
+                                        "url": urlString,
+                                        "scheme": scheme,
+                                        "method": "LSApplicationWorkspace"
+                                    ]
+                                    self.sendResponseFrame(type: .OPEN_URL, requestId: requestId, data: resp, connection: connection)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 如果私有 API 失败或不可用，使用标准的 UIApplication.open()
+                if !usePrivateAPI {
+                    // 对于自定义 scheme，直接打开，不询问用户
+                    if UIApplication.shared.canOpenURL(url) {
+                        UIApplication.shared.open(url, options: [:], completionHandler: { success in
+                            // iOS 15/16/17+: 自动处理"打开"确认对话框
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                self.handleOpenSchemeAlert()
+                            }
+                            
+                            let resp: [String: Any] = [
+                                "status": success ? "success" : "error",
+                                "message": success ? "URL opened successfully" : "Failed to open URL",
+                                "url": urlString,
+                                "scheme": scheme,
+                                "method": "UIApplication"
+                            ]
+                            print("[PhotoCompanionService] 🌐 Custom scheme open result: success=\(success)")
+                            self.sendResponseFrame(type: .OPEN_URL, requestId: requestId, data: resp, connection: connection)
+                        })
+                    } else {
+                        // 如果 canOpenURL 返回 false，仍然尝试打开
+                        UIApplication.shared.open(url, options: [:], completionHandler: { success in
+                            // iOS 15/16/17+: 自动处理"打开"确认对话框
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                self.handleOpenSchemeAlert()
+                            }
+                            
+                            let resp: [String: Any] = [
+                                "status": success ? "success" : "error",
+                                "message": success ? "URL opened successfully" : "Failed to open URL (app may not be installed)",
+                                "url": urlString,
+                                "scheme": scheme,
+                                "method": "UIApplication"
+                            ]
+                            print("[PhotoCompanionService] 🌐 Custom scheme open result: success=\(success)")
+                            self.sendResponseFrame(type: .OPEN_URL, requestId: requestId, data: resp, connection: connection)
+                        })
+                    }
                 }
             }
             return
@@ -910,7 +971,17 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                     print("[PhotoCompanionService] 🌐 Created new window and WKWebView")
                 } else {
                     // 如果没有 windowScene，使用主窗口
-                    if let mainWindow = UIApplication.shared.windows.first {
+                    // iOS 15+ 使用 UIWindowScene.windows，但为了兼容性，先尝试获取 windowScene
+                    let mainWindow: UIWindow?
+                    if #available(iOS 15.0, *) {
+                        mainWindow = UIApplication.shared.connectedScenes
+                            .compactMap { $0 as? UIWindowScene }
+                            .flatMap { $0.windows }
+                            .first
+                    } else {
+                        mainWindow = UIApplication.shared.windows.first
+                    }
+                    if let mainWindow = mainWindow {
                         let viewController = UIViewController()
                         viewController.view.backgroundColor = .systemBackground
                         
@@ -980,9 +1051,9 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
         let method = (payload["method"] as? String ?? "GET").uppercased()
         let headers = payload["headers"] as? [String: String] ?? [:]
         let bodyString = payload["body"] as? String
-        let timeout = payload["timeout"] as? Double ?? 15.0
+        let _ = payload["timeout"] as? Double ?? 15.0 // timeout (currently unused)
 
-        guard let url = URL(string: urlString) else {
+        guard let _ = URL(string: urlString) else {
             sendError(requestId: requestId, error: "Invalid URL: \(urlString)", connection: connection)
             return
         }
@@ -1620,7 +1691,7 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
         connection.send(content: frame, completion: .contentProcessed { error in
             if let error = error {
                 // 连接重置是正常的（PC 端关闭连接时）
-                if let posixError = error as? POSIXError, posixError.code == .ECONNRESET {
+                if case .posix(let code) = error, code == .ECONNRESET {
                     print("[PhotoCompanionService] ℹ️  Connection reset by peer (normal when PC closes connection)")
                 } else {
                     print("[PhotoCompanionService] ⚠️  Send error: \(error)")
@@ -1630,6 +1701,190 @@ class PhotoCompanionServiceBinary: NSObject, WKNavigationDelegate, WKScriptMessa
                 // print("[PhotoCompanionService] ✅ Frame sent successfully")
             }
         })
+    }
+    
+    /**
+     * 处理 iOS 15/16/17+ 上打开自定义 scheme 时的确认对话框
+     * 使用 XCUITest API 自动点击"打开"按钮
+     *
+     * 重要：若用户点击「取消」，alert 会立即关闭。必须在每次与 alert 交互前重新校验其存在，
+     * 否则操作已消失的 element 会导致 XCTest 异常、WDA 崩溃。
+     * 
+     * 优化：更快的检测和点击，减少用户看到对话框的时间
+     */
+    private func handleOpenSchemeAlert() {
+        print("[PhotoCompanionService] 🔐 开始处理打开 scheme 确认对话框...")
+        
+        /// 校验 alert 是否仍在（用户点「取消」后会消失），避免操作已消失的 element 导致崩溃
+        /// 使用安全的 XCUIApplication 访问方式
+        func isAlertStillPresent() -> Bool {
+            // 使用 autoreleasepool 确保内存管理正确
+            return autoreleasepool {
+                let app = XCUIApplication()
+                // 安全访问 alerts，避免崩溃
+                let alertCount = app.alerts.count
+                return alertCount > 0
+            }
+        }
+        
+        // 优化：更快的检测，减少等待时间
+        let maxRetries = 8
+        var alertFound = false
+        
+        for attempt in 1...maxRetries {
+            // 优化：更短的等待时间，更快响应
+            // 0.3s, 0.5s, 0.7s, 0.9s, 1.1s, 1.3s, 1.5s, 1.7s
+            let waitTime = Double(attempt) * 0.2 + 0.1
+            if attempt > 1 {
+                print("[PhotoCompanionService] 🔐 尝试 \(attempt)/\(maxRetries): 等待 \(waitTime) 秒后检测 alert...")
+                Thread.sleep(forTimeInterval: waitTime)
+            } else {
+                // 第一次立即检测
+                print("[PhotoCompanionService] 🔐 尝试 \(attempt)/\(maxRetries): 立即检测 alert...")
+            }
+            
+            guard isAlertStillPresent() else { continue }
+            
+            print("[PhotoCompanionService] 🔐 ✅ 检测到确认对话框（尝试 \(attempt)）")
+            alertFound = true
+            break
+        }
+        
+        guard alertFound, isAlertStillPresent() else {
+            print("[PhotoCompanionService] 🔐 ⚠️ 未检测到确认对话框或已关闭（用户可能点击了「取消」），安全退出")
+            return
+        }
+        
+        // 获取 XCUIApplication 实例（使用 autoreleasepool 确保内存管理）
+        let app = autoreleasepool {
+            return XCUIApplication()
+        }
+        
+        // 快速点击，减少用户看到对话框的时间
+        guard isAlertStillPresent() else {
+            print("[PhotoCompanionService] 🔐 Alert 已关闭（用户点击了「取消」），安全退出，不操作")
+            return
+        }
+        
+        // 直接查找并点击"打开"按钮，确保点击正确的按钮（不是"取消"）
+        var tapTarget: XCUIElement?
+        let alertElement = autoreleasepool {
+            return app.alerts.firstMatch
+        }
+        
+        // 打印所有按钮信息（用于调试和确认）
+        print("[PhotoCompanionService] 🔐 Alert 按钮列表:")
+        var buttonLabels: [String] = []
+        for i in 0..<alertElement.buttons.count {
+            let btn = alertElement.buttons.element(boundBy: i)
+            if btn.exists {
+                let label = btn.label
+                buttonLabels.append(label)
+                print("[PhotoCompanionService] 🔐   按钮 \(i): \"\(label)\" (hittable: \(btn.isHittable))")
+            }
+        }
+        
+        // 策略1: 优先通过按钮名称精确查找"打开"或"Open"按钮
+        if alertElement.buttons["打开"].exists {
+            tapTarget = alertElement.buttons["打开"]
+            print("[PhotoCompanionService] 🔐 ✅ 找到\"打开\"按钮（通过名称，中文），准备点击...")
+        } else if alertElement.buttons["Open"].exists {
+            tapTarget = alertElement.buttons["Open"]
+            print("[PhotoCompanionService] 🔐 ✅ 找到\"Open\"按钮（通过名称，英文），准备点击...")
+        }
+        // 策略2: 如果通过名称找不到，遍历所有按钮，查找包含"打开"或"Open"但不包含"取消"的按钮
+        else {
+            for i in 0..<alertElement.buttons.count {
+                let btn = alertElement.buttons.element(boundBy: i)
+                if btn.exists {
+                    let label = btn.label
+                    // 确保包含"打开"或"Open"，且不包含"取消"或"Cancel"
+                    let isOpenButton = (label.contains("打开") || label.lowercased().contains("open"))
+                    let isCancelButton = (label.contains("取消") || label.lowercased().contains("cancel"))
+                    
+                    if isOpenButton && !isCancelButton {
+                        tapTarget = btn
+                        print("[PhotoCompanionService] 🔐 ✅ 通过标签找到\"打开\"按钮: \"\(label)\" (索引 \(i))")
+                        break
+                    }
+                }
+            }
+        }
+        
+        // 策略3: 如果还是没找到，且按钮数量为2，检查第二个按钮的标签
+        if tapTarget == nil && alertElement.buttons.count == 2 {
+            let second = alertElement.buttons.element(boundBy: 1)
+            if second.exists {
+                let label = second.label
+                // 确认不是"取消"或"Cancel"
+                let isCancelButton = label.contains("取消") || label.lowercased().contains("cancel")
+                if !isCancelButton {
+                    tapTarget = second
+                    print("[PhotoCompanionService] 🔐 ✅ 使用第二个按钮作为\"打开\": \"\(label)\"")
+                } else {
+                    print("[PhotoCompanionService] 🔐 ⚠️ 第二个按钮是\"取消\"，尝试第一个按钮")
+                    // 如果第二个是"取消"，第一个应该是"打开"
+                    let first = alertElement.buttons.element(boundBy: 0)
+                    if first.exists {
+                        let firstLabel = first.label
+                        let isCancel = firstLabel.contains("取消") || firstLabel.lowercased().contains("cancel")
+                        if !isCancel {
+                            tapTarget = first
+                            print("[PhotoCompanionService] 🔐 ✅ 使用第一个按钮作为\"打开\": \"\(firstLabel)\"")
+                        }
+                    }
+                }
+            }
+        }
+        
+        guard isAlertStillPresent(), let button = tapTarget, button.exists else {
+            print("[PhotoCompanionService] 🔐 点击前 alert 已关闭或按钮无效（用户可能点击了「取消」），安全退出")
+            return
+        }
+        
+        // 最后一次检查，确保 alert 仍在
+        guard isAlertStillPresent() else {
+            print("[PhotoCompanionService] 🔐 点击前最后一刻 alert 已关闭（用户点击了「取消」），安全退出")
+            return
+        }
+        
+        // 执行点击
+        print("[PhotoCompanionService] 🔐 正在点击\"打开\"按钮...")
+        if button.isHittable {
+            button.tap()
+            print("[PhotoCompanionService] ✅ 已自动点击\"打开\"按钮")
+        } else {
+            // 即使不可点击也尝试点击（某些情况下按钮可能暂时不可点击）
+            button.tap()
+            print("[PhotoCompanionService] ✅ 已点击\"打开\"按钮（强制）")
+        }
+        
+        // 短暂等待，验证点击是否成功
+        Thread.sleep(forTimeInterval: 0.3)
+        
+        let finalApp = autoreleasepool {
+            return XCUIApplication()
+        }
+        if finalApp.alerts.count == 0 {
+            print("[PhotoCompanionService] ✅ Alert 已消失，点击成功")
+        } else {
+            print("[PhotoCompanionService] ⚠️ Alert 仍存在，可能需再次点击")
+            // 如果 alert 仍然存在，尝试再次点击
+            if isAlertStillPresent() {
+                Thread.sleep(forTimeInterval: 0.2)
+                let retryAlert = finalApp.alerts.firstMatch
+                var retryButton: XCUIElement?
+                if retryAlert.buttons["打开"].exists {
+                    retryButton = retryAlert.buttons["打开"]
+                } else if retryAlert.buttons["Open"].exists {
+                    retryButton = retryAlert.buttons["Open"]
+                }
+                if isAlertStillPresent(), let btn = retryButton, btn.exists {
+                    btn.tap()
+                    print("[PhotoCompanionService] ✅ 已再次点击\"打开\"按钮")
+                }
+            }
+        }
     }
 }
 

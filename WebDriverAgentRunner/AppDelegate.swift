@@ -28,35 +28,75 @@ import AVFoundation
         
         isStarted = true
         
+        print("[PhotoCompanionServiceManager] Starting service...")
+        
+        // 确保在主线程上执行（XCTest 环境要求）
+        if Thread.isMainThread {
+            startServiceInternal()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.startServiceInternal()
+            }
+        }
+    }
+    
+    private func startServiceInternal() {
         // 配置音频会话以保持应用在后台运行
         setupAudioSession()
         
-        // 请求照片访问权限
-        PHPhotoLibrary.requestAuthorization { [weak self] status in
-            guard let self = self else { return }
-            
-            // 检查授权状态（兼容 iOS 14+ 的 .limited 状态）
-            let isAuthorized: Bool
-            if #available(iOS 14, *) {
-                isAuthorized = status == .authorized || status == .limited
-            } else {
-                isAuthorized = status == .authorized
-            }
-            
-            if isAuthorized {
-                print("[PhotoCompanionServiceManager] Photo library access granted")
-                // 启动服务
-                DispatchQueue.main.async {
-                    self.photoService = PhotoCompanionServiceBinary()
-                    self.photoService?.start()
-                    print("[PhotoCompanionServiceManager] ✅ Photo Companion Service started")
-                    print("[PhotoCompanionServiceManager] ✅ Service can run in background")
+        // 检查当前授权状态（避免不必要的授权请求）
+        let currentStatus = PHPhotoLibrary.authorizationStatus()
+        let isAuthorized: Bool
+        if #available(iOS 14, *) {
+            isAuthorized = currentStatus == .authorized || currentStatus == .limited
+        } else {
+            isAuthorized = currentStatus == .authorized
+        }
+        
+        if isAuthorized {
+            // 已经授权，直接启动服务
+            print("[PhotoCompanionServiceManager] Photo library access already granted")
+            startServiceOnMainThread()
+        } else {
+            // 请求照片访问权限
+            print("[PhotoCompanionServiceManager] Requesting photo library access...")
+            PHPhotoLibrary.requestAuthorization { [weak self] status in
+                guard let self = self else { return }
+                
+                // 检查授权状态（兼容 iOS 14+ 的 .limited 状态）
+                let isAuthorized: Bool
+                if #available(iOS 14, *) {
+                    isAuthorized = status == .authorized || status == .limited
+                } else {
+                    isAuthorized = status == .authorized
                 }
-            } else {
-                print("[PhotoCompanionServiceManager] ❌ Photo library access denied")
-                print("[PhotoCompanionServiceManager] Please grant photo library access in Settings")
+                
+                if isAuthorized {
+                    print("[PhotoCompanionServiceManager] Photo library access granted")
+                    // 启动服务（确保在主线程）
+                    DispatchQueue.main.async {
+                        self.startServiceOnMainThread()
+                    }
+                } else {
+                    print("[PhotoCompanionServiceManager] ❌ Photo library access denied")
+                    print("[PhotoCompanionServiceManager] Please grant photo library access in Settings")
+                    // 即使没有授权也尝试启动服务（某些功能可能不需要照片权限）
+                    DispatchQueue.main.async {
+                        self.startServiceOnMainThread()
+                    }
+                }
             }
         }
+    }
+    
+    private func startServiceOnMainThread() {
+        // 确保在主线程
+        assert(Thread.isMainThread, "startServiceOnMainThread must be called on main thread")
+        
+        self.photoService = PhotoCompanionServiceBinary()
+        self.photoService?.start()
+        print("[PhotoCompanionServiceManager] ✅ Photo Companion Service started")
+        print("[PhotoCompanionServiceManager] ✅ Service can run in background")
     }
     
     @objc func stopService() {

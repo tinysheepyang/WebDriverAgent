@@ -106,6 +106,83 @@ async function ensureDeveloperImageMounted(udid) {
     }
 }
 /**
+ * 清理已存在的隧道进程（解决端口占用问题）
+ */
+async function cleanupExistingTunnel(udid) {
+    try {
+        const iosPath = getIOSCommandPath();
+        console.log(`[iOSSetup] 🧹 Starting tunnel cleanup for device: ${udid}`);
+        // 1. 先尝试停止隧道（使用 go-ios 命令）
+        try {
+            console.log(`[iOSSetup] Step 1: Stopping tunnel via go-ios command...`);
+            await execAsync(`"${iosPath}" tunnel stop --udid=${udid} 2>&1`, { timeout: 5000 });
+            console.log(`[iOSSetup] ✅ Tunnel stop command executed`);
+        }
+        catch (error) {
+            // 停止失败可能表示隧道不存在，这是正常的
+            if (!error.message?.includes('no tunnel') && !error.message?.includes('not running')) {
+                console.warn(`[iOSSetup] ⚠️ Tunnel stop command failed: ${error.message}`);
+            }
+        }
+        // 2. 查找并清理所有 go-ios tunnel 相关进程
+        try {
+            console.log(`[iOSSetup] Step 2: Finding tunnel processes...`);
+            // 查找所有包含 "ios" 和 "tunnel" 的进程
+            const { stdout } = await execAsync(`ps aux | grep -E "(ios|go-ios).*tunnel" | grep -v grep | awk '{print $2}'`, { timeout: 3000 });
+            const pids = stdout.trim().split('\n').filter(Boolean);
+            if (pids.length > 0) {
+                console.log(`[iOSSetup] Found ${pids.length} tunnel-related processes: ${pids.join(', ')}`);
+                for (const pid of pids) {
+                    try {
+                        // 先尝试 SIGTERM，再尝试 SIGKILL
+                        await execAsync(`kill -TERM ${pid} 2>&1`, { timeout: 1000 });
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        await execAsync(`kill -9 ${pid} 2>&1`, { timeout: 1000 });
+                        console.log(`[iOSSetup] ✅ Killed tunnel process: ${pid}`);
+                    }
+                    catch (error) {
+                        // 忽略错误（进程可能已经退出）
+                    }
+                }
+            }
+            else {
+                console.log(`[iOSSetup] No tunnel processes found`);
+            }
+        }
+        catch (error) {
+            // 查找进程失败，忽略
+            console.warn(`[iOSSetup] ⚠️ Failed to find tunnel processes: ${error}`);
+        }
+        // 3. 检查并清理占用端口 60105 的进程（go-ios tunnel 默认端口）
+        try {
+            console.log(`[iOSSetup] Step 3: Checking port 60105...`);
+            const { stdout } = await execAsync(`lsof -ti :60105 2>&1`, { timeout: 3000 });
+            const portPids = stdout.trim().split('\n').filter(Boolean);
+            if (portPids.length > 0) {
+                console.log(`[iOSSetup] Found processes on port 60105: ${portPids.join(', ')}`);
+                for (const pid of portPids) {
+                    try {
+                        await execAsync(`kill -9 ${pid} 2>&1`, { timeout: 1000 });
+                        console.log(`[iOSSetup] ✅ Killed process on port 60105: ${pid}`);
+                    }
+                    catch (error) {
+                        // 忽略错误
+                    }
+                }
+            }
+        }
+        catch (error) {
+            // 端口可能未被占用，这是正常的
+        }
+        // 4. 等待端口释放
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log(`[iOSSetup] ✅ Tunnel cleanup completed`);
+    }
+    catch (error) {
+        console.warn(`[iOSSetup] ⚠️ Failed to cleanup existing tunnel: ${error}`);
+    }
+}
+/**
  * 检查 iOS 隧道是否正在运行
  */
 export async function checkTunnelStatus(udid) {
@@ -124,9 +201,62 @@ export async function checkTunnelStatus(udid) {
     }
 }
 /**
+ * 获取 iOS 版本（用于判断是否需要启动隧道）
+ */
+async function getIOSVersion(udid) {
+    try {
+        const iosPath = getIOSCommandPath();
+        const { stdout } = await execAsync(`"${iosPath}" info --udid=${udid} 2>&1`, { timeout: 5000 });
+        // 解析 JSON 输出
+        const lines = stdout.trim().split('\n').filter(line => line.trim());
+        for (const line of lines) {
+            try {
+                const data = JSON.parse(line);
+                // 尝试多个可能的版本字段
+                const version = data.ProductVersion || data.HumanReadableProductVersionString || data.version;
+                if (version) {
+                    return String(version);
+                }
+            }
+            catch (error) {
+                // 忽略 JSON 解析错误
+            }
+        }
+    }
+    catch (error) {
+        console.warn(`[iOSSetup] Failed to get iOS version: ${error}`);
+    }
+    return null;
+}
+/**
+ * 检查 iOS 版本是否需要隧道（iOS 17+ 需要）
+ */
+async function needsTunnel(udid) {
+    const version = await getIOSVersion(udid);
+    if (!version) {
+        // 无法获取版本，默认假设需要隧道（保守策略）
+        console.log(`[iOSSetup] ⚠️ Cannot determine iOS version, assuming tunnel is needed`);
+        return true;
+    }
+    // 解析版本号（例如 "17.0" -> 17, "15.6" -> 15）
+    const majorVersion = parseInt(version.split('.')[0], 10);
+    const needs = majorVersion >= 17;
+    console.log(`[iOSSetup] iOS version: ${version} (major: ${majorVersion}), tunnel needed: ${needs}`);
+    return needs;
+}
+/**
  * 启动 iOS 隧道
  */
 export async function startTunnel(udid) {
+    // 先检查是否需要隧道（iOS <17 不需要）
+    const requiresTunnel = await needsTunnel(udid);
+    if (!requiresTunnel) {
+        console.log(`[iOSSetup] ✅ iOS version < 17, tunnel not required`);
+        return true; // 返回成功，因为不需要隧道
+    }
+    // 注意：cleanupExistingTunnel 应该在调用 startTunnel 之前已经执行
+    // 这里不再重复清理，避免不必要的延迟
+    // 如果 setupIOSEnvironment 已经清理过，这里就不需要再清理了
     return new Promise((resolve) => {
         const iosPath = getIOSCommandPath();
         const projectRoot = process.env.IOS_COMMAND_PATH || (typeof global !== 'undefined' && global.electronApp && global.electronApp.isPackaged)
@@ -172,6 +302,21 @@ export async function startTunnel(udid) {
         proc.stderr?.on('data', (data) => {
             const output = data.toString();
             stderr += output;
+            // 检测端口占用错误
+            if (output.includes('bind: address already in use') || output.includes('address already in use')) {
+                console.error(`[iOSSetup] ❌ Tunnel port is already in use`);
+                console.error(`[iOSSetup] This usually means another tunnel process is running`);
+                console.error(`[iOSSetup] Port cleanup should have been done before starting, but port is still in use`);
+                console.error(`[iOSSetup] This may indicate a race condition or incomplete cleanup`);
+                // 不再重试，直接返回失败（避免多次密码输入）
+                // 调用者应该先调用 cleanupExistingTunnel 再启动
+                if (startupTimeout) {
+                    clearTimeout(startupTimeout);
+                    startupTimeout = null;
+                }
+                resolve(false); // 返回失败，让调用者决定是否重试
+                return;
+            }
             // 检测启动成功的信号（从 stderr 也可能输出）
             if (!tunnelStarted && (output.includes('Tunnel server started') ||
                 output.includes('start tunnel') ||
@@ -294,23 +439,35 @@ export async function setupIOSEnvironment(udid) {
     }
     const result = existingEntry?.status ?? { tunnel: false, ddi: false };
     const setupPromise = (async () => {
-        // 1. 检查并启动隧道
+        // 1. 检查并启动隧道（iOS 17+ 需要）
         console.log(`[iOSSetup] Checking iOS tunnel status...`);
-        const tunnelRunning = await checkTunnelStatus(udid);
-        if (tunnelRunning) {
-            console.log(`[iOSSetup] ✅ iOS tunnel is already running`);
-            result.tunnel = true;
+        // 先检查是否需要隧道
+        const requiresTunnel = await needsTunnel(udid);
+        if (!requiresTunnel) {
+            console.log(`[iOSSetup] ✅ iOS version < 17, tunnel not required`);
+            result.tunnel = true; // 标记为成功，因为不需要隧道
         }
         else {
-            console.log(`[iOSSetup] Starting iOS tunnel...`);
-            result.tunnel = await startTunnel(udid);
-            if (result.tunnel) {
-                console.log(`[iOSSetup] ✅ iOS tunnel started`);
+            // 先检查隧道是否已经在运行
+            const tunnelRunning = await checkTunnelStatus(udid);
+            if (tunnelRunning) {
+                console.log(`[iOSSetup] ✅ iOS tunnel is already running`);
+                result.tunnel = true;
             }
             else {
-                console.log(`[iOSSetup] ⚠️  Failed to start iOS tunnel (may already be running)`);
-                // 即使启动失败，也继续尝试挂载（可能隧道已经在运行）
-                result.tunnel = true;
+                // 在启动前先清理（避免端口占用）
+                console.log(`[iOSSetup] Cleaning up existing tunnel before starting...`);
+                await cleanupExistingTunnel(udid);
+                console.log(`[iOSSetup] Starting iOS tunnel...`);
+                result.tunnel = await startTunnel(udid);
+                if (result.tunnel) {
+                    console.log(`[iOSSetup] ✅ iOS tunnel started`);
+                }
+                else {
+                    console.log(`[iOSSetup] ⚠️  Failed to start iOS tunnel (may already be running)`);
+                    // 即使启动失败，也继续尝试挂载（可能隧道已经在运行）
+                    result.tunnel = true;
+                }
             }
         }
         // 2. 检查并挂载 Developer Disk Image

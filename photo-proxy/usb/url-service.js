@@ -163,6 +163,18 @@ export class URLService {
      */
     setDevice(device) {
         this.device = device;
+        // 同步更新 BridgeServicePortForward 的设备信息（如果已初始化）
+        if (this.bridgeService) {
+            // 注意：这里不直接设置 bridgeService.device，而是通过 connect 方法设置
+            // 但如果连接已断开，需要确保设备信息可用
+            // 我们可以在 connect 时传递设备，但这里先确保设备信息可用
+        }
+    }
+    /**
+     * 获取当前设备（用于外部检查）
+     */
+    getDevice() {
+        return this.device;
     }
     /**
      * 获取设备 UDID
@@ -296,14 +308,88 @@ export class URLService {
      * @param extra - 额外参数（可选）
      */
     async autoLogin(phone, env, extra) {
-        if (!this.connected) {
+        // 确保设备已设置
+        if (!this.device) {
+            throw new Error('No device set. Please call setDevice() before autoLogin()');
+        }
+        // 如果连接不健康或未连接，先断开然后重新连接以确保设备信息同步
+        // 这样可以确保 BridgeServicePortForward 的设备信息是最新的
+        if (!this.connected || !this.bridgeService?.isConnected()) {
+            // 先断开旧连接（如果有）
+            if (this.bridgeService) {
+                try {
+                    await this.bridgeService.disconnect();
+                }
+                catch (error) {
+                    // 忽略断开错误
+                }
+            }
+            this.connected = false;
+            // 重新连接（这会传递最新的设备信息给 BridgeServicePortForward）
             await this.connect();
         }
         if (!this.connected) {
             throw new Error('Not connected to iOS Companion Service');
         }
         console.log(`[URLService] 📤 AUTO_LOGIN via Companion: phone=${phone}, env=${env || ''}`);
-        return this.bridgeService.autoLogin(phone, env, extra);
+        // 调用 Companion Service 的 autoLogin
+        const result = await this.bridgeService.autoLogin(phone, env, extra);
+        // iOS 15 及以下版本在打开自定义 URL scheme 时会弹出确认对话框
+        // 需要自动点击确认按钮
+        if (this.device) {
+            const iosVersion = this.device.iosVersion || this.device.version;
+            if (iosVersion) {
+                const majorVersion = parseInt(iosVersion.split('.')[0], 10);
+                // iOS 15 及以下版本需要处理确认对话框
+                if (majorVersion <= 15) {
+                    console.log(`[URLService] 🔔 iOS ${iosVersion} detected, waiting for confirmation dialog...`);
+                    try {
+                        // 等待确认对话框出现（通常需要 0.5-1 秒）
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        // 确保端口转发 8100 已建立（用于 WebDriverAgent）
+                        await ensurePortForward8100(this.device.udid);
+                        // 使用 WebDriverAgent 的 Alert API 自动接受确认对话框
+                        const wdaBaseUrl = `http://127.0.0.1:8100`;
+                        const alertTextResponse = await fetch(`${wdaBaseUrl}/alert/text`, {
+                            method: 'GET',
+                            signal: AbortSignal.timeout(3000)
+                        });
+                        if (alertTextResponse.ok) {
+                            const alertText = await alertTextResponse.text();
+                            console.log(`[URLService] 🔔 Found alert dialog: ${alertText}`);
+                            // 检查是否包含"小赢卡贷"或类似的确认对话框
+                            if (alertText && (alertText.includes('小赢卡贷') || alertText.includes('打开') || alertText.includes('Open'))) {
+                                console.log(`[URLService] ✅ Auto-accepting confirmation dialog...`);
+                                const acceptResponse = await fetch(`${wdaBaseUrl}/alert/accept`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    signal: AbortSignal.timeout(3000)
+                                });
+                                if (acceptResponse.ok) {
+                                    console.log(`[URLService] ✅ Confirmation dialog accepted successfully`);
+                                }
+                                else {
+                                    console.warn(`[URLService] ⚠️ Failed to accept alert: ${acceptResponse.status}`);
+                                }
+                            }
+                            else {
+                                console.log(`[URLService] ℹ️ Alert dialog found but doesn't match expected pattern, skipping auto-accept`);
+                            }
+                        }
+                        else {
+                            // 没有 Alert 对话框，这是正常的（可能已经自动处理或不需要确认）
+                            console.log(`[URLService] ℹ️ No alert dialog found (status: ${alertTextResponse.status}), this is normal`);
+                        }
+                    }
+                    catch (error) {
+                        // 处理 Alert 失败不影响登录流程，只记录警告
+                        console.warn(`[URLService] ⚠️ Failed to handle confirmation dialog: ${error.message || String(error)}`);
+                        console.warn(`[URLService] ⚠️ This is not critical, login may still succeed`);
+                    }
+                }
+            }
+        }
+        return result;
     }
     /**
      * 设备侧发起 HTTP 请求并返回响应（通过 Companion）

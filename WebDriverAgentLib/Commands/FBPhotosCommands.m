@@ -70,8 +70,8 @@
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     __block PHAuthorizationStatus status = PHAuthorizationStatusNotDetermined;
     
-    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus authStatus) {
-      status = authStatus;
+    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus authorizationStatus) {
+      status = authorizationStatus;
       dispatch_semaphore_signal(semaphore);
     }];
     
@@ -176,8 +176,8 @@
                                              targetSize:targetSize
                                             contentMode:PHImageContentModeAspectFill
                                                 options:options
-                                          resultHandler:^(UIImage *result, NSDictionary *info) {
-    thumbnail = result;
+                                          resultHandler:^(UIImage *imageResult, NSDictionary *info) {
+    thumbnail = imageResult;
     requestError = info[PHImageErrorKey];
   }];
   
@@ -326,8 +326,8 @@
   
   [[PHImageManager defaultManager] requestAVAssetForVideo:asset
                                                    options:options
-                                             resultHandler:^(AVAsset *asset, AVAudioMix *audioMix, NSDictionary *info) {
-    avAsset = asset;
+                                             resultHandler:^(AVAsset *videoAsset, AVAudioMix *audioMix, NSDictionary *info) {
+    avAsset = videoAsset;
     requestError = info[PHImageErrorKey];
     dispatch_semaphore_signal(semaphore);
   }];
@@ -394,6 +394,9 @@
       break;
     case PHAuthorizationStatusLimited:
       status = @"limited";
+      break;
+    default:
+      status = @"unknown";
       break;
   }
   
