@@ -398,24 +398,28 @@ export class URLService {
      * 如果失败，回退到通过 Companion Service 执行
      */
     async httpRequest(options) {
+        // 如果明确要求跳过 WDA，直接使用 Companion Service
+        if (options.skipWDA) {
+            console.log(`[URLService] 📤 Using Companion Service directly (WDA skipped): ${options.method || 'GET'} ${options.url}`);
+            if (!this.connected) {
+                await this.connect();
+            }
+            if (!this.connected) {
+                throw new Error('Not connected to iOS Companion Service');
+            }
+            return this.bridgeService.httpRequest(options);
+        }
         // 首先尝试通过 WebDriverAgent 的 HTTP API 在 iOS 端执行
         // WebDriverAgent 运行在设备上，可能有更好的网络权限
         try {
-            // 确保端口转发 8100 已建立
-            if (this.device) {
-                const udid = this.device.udid;
-                console.log(`[URLService] 🔧 Ensuring port forward 8100->8100 for WebDriverAgent...`);
-                await ensurePortForward8100(udid);
-            }
-            // 使用 127.0.0.1 而不是 localhost，确保在 Node.js 中能正确解析
+            // 快速检查 WebDriverAgent 是否可用（不建立端口转发，直接检查）
             const wdaBaseUrl = `http://127.0.0.1:8100`;
-            const wdaUrl = `${wdaBaseUrl}/photos/http-request`;
-            // 先检查 WebDriverAgent 是否可用
-            console.log(`[URLService] 🔍 Checking WebDriverAgent availability: ${wdaBaseUrl}/status`);
+            console.log(`[URLService] 🔍 Quick checking WebDriverAgent availability: ${wdaBaseUrl}/status`);
+            // 使用更短的超时时间（1秒），快速判断 WDA 是否可用
             try {
                 const statusResponse = await fetch(`${wdaBaseUrl}/status`, {
                     method: 'GET',
-                    signal: AbortSignal.timeout(3000) // 3秒超时
+                    signal: AbortSignal.timeout(1000) // 1秒超时，快速失败
                 });
                 if (!statusResponse.ok) {
                     throw new Error(`WebDriverAgent status check failed: ${statusResponse.status}`);
@@ -423,11 +427,14 @@ export class URLService {
                 console.log(`[URLService] ✅ WebDriverAgent is available`);
             }
             catch (statusError) {
+                // 快速检查失败，立即回退到 Companion Service，不尝试建立端口转发
                 const statusErrorMsg = statusError.message || String(statusError);
-                console.warn(`[URLService] ⚠️ WebDriverAgent status check failed: ${statusErrorMsg}`);
-                console.warn(`[URLService] ⚠️ WebDriverAgent may not be running. Please ensure WebDriverAgent is started.`);
+                console.warn(`[URLService] ⚠️ WebDriverAgent quick check failed: ${statusErrorMsg}`);
+                console.warn(`[URLService] ⚠️ WebDriverAgent is not available. Falling back to Companion Service immediately.`);
                 throw new Error(`WebDriverAgent not available: ${statusErrorMsg}`);
             }
+            // WDA 可用，继续使用 WDA
+            const wdaUrl = `${wdaBaseUrl}/photos/http-request`;
             const wdaPayload = {
                 url: options.url,
                 method: options.method || 'GET',
