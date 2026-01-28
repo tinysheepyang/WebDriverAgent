@@ -2352,7 +2352,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: huihui zhu (6M8S6L57HU)";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_BITCODE = NO;
@@ -2419,7 +2419,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: huihui zhu (6M8S6L57HU)";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_BITCODE = NO;
@@ -2619,7 +2619,7 @@
 			buildSettings = {
 				CLANG_STATIC_ANALYZER_MODE = deep;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: huihui zhu (6M8S6L57HU)";
 				CODE_SIGN_STYLE = Manual;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
@@ -2640,10 +2640,10 @@
 					"$(inherited)",
 					"-all_load",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.facebook.WebDriverAgentRunner.xyautotest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = WDAAutoTestDevelop;
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = com.facebook.WebDriverAgentRunner.xyautotest;
 				SWIFT_OBJC_BRIDGING_HEADER = "WebDriverAgentRunner/WebDriverAgentRunner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				USES_XCTRUNNER = YES;
@@ -2680,6 +2680,7 @@
 			baseConfigurationReference = EEE5CABF1C80361500CBBDD9 /* IOSSettings.xcconfig */;
 			buildSettings = {
 				CLANG_STATIC_ANALYZER_MODE = deep;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: huihui zhu (6M8S6L57HU)";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = Y8LRQ27V4E;
@@ -2700,10 +2701,10 @@
 					"$(inherited)",
 					"-all_load",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.facebook.WebDriverAgentRunner.xyautotest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = WDAAutoTestDevelop;
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = com.facebook.WebDriverAgentRunner.xyautotest;
 				SWIFT_OBJC_BRIDGING_HEADER = "WebDriverAgentRunner/WebDriverAgentRunner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				USES_XCTRUNNER = YES;

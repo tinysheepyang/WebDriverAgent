@@ -4,10 +4,12 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string></string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.facebook.WebDriverAgentRunner.xyautotest</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -20,29 +22,10 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>UIBackgroundModes</key>
+	<key>LSApplicationQueriesSchemes</key>
 	<array>
-		<string>processing</string>
-		<string>voip</string>
+		<string>cardloanTest</string>
 	</array>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string></string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string></string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>WebDriverAgent needs access to photos for automation testing</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>WebDriverAgent needs access to save photos</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>需要本地网络权限以提供照片访问服务</string>
-	<key>CFBundleDisplayName</key>
-	<string></string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>需要访问照片库以提供照片和视频访问服务</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>需要访问照片库以提供照片和视频访问服务</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -67,9 +50,22 @@
 			</dict>
 		</dict>
 	</dict>
-	<key>LSApplicationQueriesSchemes</key>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>需要本地网络权限以提供照片访问服务</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string></string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string></string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string></string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要访问照片库以提供照片和视频访问服务</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要访问照片库以提供照片和视频访问服务</string>
+	<key>UIBackgroundModes</key>
 	<array>
-		<string>cardloanTest</string>
+		<string>processing</string>
+		<string>voip</string>
 	</array>
 </dict>
 </plist>

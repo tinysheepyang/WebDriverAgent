@@ -49,12 +49,16 @@ fi
 
 cd "${WDA_ROOT}"
 
+# -destination "generic/platform=iOS" 使真机构建不依赖已连接设备，对 iOS 26 / Xcode 26 更稳定
+# ARCHS=arm64 与官方 build-real.sh 一致，避免多余架构导致签名/兼容问题
 xcodebuild build-for-testing \
   -project "WebDriverAgent.xcodeproj" \
   -scheme "${SCHEME}" \
   -sdk "${SDK}" \
+  -destination "generic/platform=iOS" \
   -configuration "${CONFIGURATION}" \
-  -derivedDataPath "${DERIVED_DATA_PATH}"
+  -derivedDataPath "${DERIVED_DATA_PATH}" \
+  CODE_SIGNING_ALLOWED=NO ARCHS=arm64
 
 PRODUCTS_DIR="${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}-${SDK}"
 if [[ ! -d "${PRODUCTS_DIR}" ]]; then
